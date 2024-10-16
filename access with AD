@@ -1,0 +1,96 @@
+import pyodbc
+import pandas as pd
+from msal import ConfidentialClientApplication, PublicClientApplication
+
+# Connection details
+server = "analysis.windows.net"
+database = "YOUR_DATASET_NAME"
+workspace_id = "YOUR_WORKSPACE_ID"
+
+# Authentication method (choose one)
+auth_method = "entra_id"  # Options: "service_principal", "device_code", "entra_id"
+
+def get_access_token(auth_method):
+    if auth_method == "service_principal":
+        client_id = "YOUR_CLIENT_ID"
+        client_secret = "YOUR_CLIENT_SECRET"
+        tenant_id = "YOUR_TENANT_ID"
+        
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        app = ConfidentialClientApplication(
+            client_id, authority=authority, client_credential=client_secret
+        )
+        result = app.acquire_token_for_client(scopes=["https://analysis.windows.net/powerbi/api/.default"])
+        if "access_token" in result:
+            return result["access_token"]
+        else:
+            print(f"Error: {result.get('error')}")
+            print(f"Error description: {result.get('error_description')}")
+            return None
+    
+    elif auth_method == "device_code":
+        client_id = "YOUR_CLIENT_ID"
+        tenant_id = "YOUR_TENANT_ID"
+        
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        app = PublicClientApplication(client_id, authority=authority)
+        result = app.acquire_token_interactive(scopes=["https://analysis.windows.net/powerbi/api/.default"])
+        if "access_token" in result:
+            return result["access_token"]
+        else:
+            print(f"Error: {result.get('error')}")
+            print(f"Error description: {result.get('error_description')}")
+            return None
+
+    elif auth_method == "entra_id":
+        # For Entra ID (Azure AD) login, we'll use the connection string directly
+        return None
+
+# Get the access token (only for service_principal and device_code methods)
+access_token = get_access_token(auth_method) if auth_method != "entra_id" else None
+
+# Create the connection string
+if auth_method == "entra_id":
+    conn_str = (
+        f"Driver={{MSOLAP}};Server=powerbi://api.powerbi.com/v1.0/myorg/{workspace_id};"
+        f"Initial Catalog={database};"
+        "Auth Mode=ActiveDirectoryInteractive;"
+    )
+else:
+    conn_str = (
+        f"Driver={{MSOLAP}};Server=powerbi://api.powerbi.com/v1.0/myorg/{workspace_id};"
+        f"Initial Catalog={database};"
+        f"Auth Mode=AAD;AAD Token={access_token};"
+    )
+
+# Create a connection
+try:
+    conn = pyodbc.connect(conn_str, autocommit=True)
+    cursor = conn.cursor()
+
+    # Execute a simple MDX query
+    mdx = """
+    SELECT 
+    [Measures].[Internet Total Sales] ON COLUMNS,
+    [Date].[Calendar Year].MEMBERS ON ROWS
+    FROM [Adventure Works]
+    """
+    
+    cursor.execute(mdx)
+    
+    # Fetch the results
+    columns = [column[0] for column in cursor.description]
+    results = cursor.fetchall()
+    
+    # Convert to DataFrame
+    df = pd.DataFrame.from_records(results, columns=columns)
+    
+    print(df)
+    
+except pyodbc.Error as e:
+    print(f"An error occurred: {e}")
+finally:
+    if 'conn' in locals():
+        conn.close()
+
+print("Connection and query execution completed.")
